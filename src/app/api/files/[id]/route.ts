@@ -1,5 +1,7 @@
+import { del } from '@vercel/blob'
 import { db } from '@/lib/db'
 import { checkCode, unauthorized } from '@/lib/hub-auth'
+import { BLOB_ENABLED, blobUrlOf } from '@/lib/storage'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,6 +19,14 @@ export async function GET(req: Request, { params }: Params) {
   const file = await db.storedFile.findUnique({ where: { id } })
   if (!file) {
     return Response.json({ error: 'File not found' }, { status: 404 })
+  }
+
+  // Big files: bytes live in Vercel Blob — bounce the browser straight there.
+  const url = blobUrlOf(file)
+  if (url && BLOB_ENABLED) {
+    const inline = new URL(req.url).searchParams.get('inline') === '1'
+    const target = inline ? url : `${url}${url.includes('?') ? '&' : '?'}download=1`
+    return Response.redirect(target, 302)
   }
 
   const inline = new URL(req.url).searchParams.get('inline') === '1'
@@ -38,12 +48,19 @@ export async function DELETE(req: Request, { params }: Params) {
   const { id } = await params
   const existing = await db.storedFile.findUnique({
     where: { id },
-    select: { id: true },
+    select: { id: true, ...(BLOB_ENABLED ? { blobUrl: true } : {}) },
   })
   if (!existing) {
     return Response.json({ error: 'File not found' }, { status: 404 })
   }
 
   await db.storedFile.delete({ where: { id } })
+
+  // Best-effort cleanup of the blob copy — the hub stays correct either way.
+  const url = blobUrlOf(existing)
+  if (url) {
+    await del(url).catch(() => {})
+  }
+
   return Response.json({ ok: true })
 }

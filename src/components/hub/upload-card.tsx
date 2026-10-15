@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
+import { upload } from '@vercel/blob/client'
 import {
   CloudUpload,
   File as FileIcon,
@@ -22,6 +23,7 @@ import {
   getUploaderName,
   saveUploaderName,
 } from '@/lib/hub-client'
+import { BLOB_MAX_FILE_MB } from '@/lib/storage'
 
 interface UploadCardProps {
   onUploaded: () => void
@@ -35,17 +37,25 @@ export function UploadCard({ onUploaded }: UploadCardProps) {
   const [uploader, setUploader] = useState<string>(() => '')
   const [dragOver, setDragOver] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [blobMode, setBlobMode] = useState(false)
 
   useEffect(() => {
     setUploader(getUploaderName())
+    fetch('/api/blob-status')
+      .then((r) => r.json())
+      .then((j) => setBlobMode(Boolean(j?.enabled)))
+      .catch(() => setBlobMode(false))
   }, [])
+
+  const effectiveMaxMb = blobMode ? BLOB_MAX_FILE_MB : MAX_FILE_MB
 
   function pickFile(f: File | null) {
     if (!f) return
-    if (f.size > MAX_SIZE) {
+    if (f.size > effectiveMaxMb * 1024 * 1024) {
       toast({
         title: 'File too large',
-        description: `${f.name} is ${formatBytes(f.size)} — the limit is ${MAX_FILE_MB} MB.`,
+        description: `${f.name} is ${formatBytes(f.size)} — the limit is ${effectiveMaxMb} MB.`,
         variant: 'destructive',
       })
       return
@@ -63,11 +73,38 @@ export function UploadCard({ onUploaded }: UploadCardProps) {
   async function handleUpload() {
     if (!file || uploading) return
     setUploading(true)
+    setProgress(0)
     try {
+      // Big-file path: stream straight to Vercel Blob (no serverless body cap).
+      let blobUrl = ''
+      if (blobMode) {
+        try {
+          const blob = await upload(file.name, file, {
+            access: 'public',
+            handleUploadUrl: '/api/files/blob',
+            clientPayload: localStorage.getItem('hubCode') ?? '',
+            contentType: file.type || undefined,
+            multipart: file.size > 32 * 1024 * 1024,
+            onUploadProgress: (p) => setProgress(Math.round(p.percentage)),
+          })
+          blobUrl = blob.url
+        } catch {
+          blobUrl = '' // Blob unavailable — fall back to the database path
+        }
+      }
+
       const body = new FormData()
-      body.append('file', file)
+      if (blobUrl) {
+        body.append('blobUrl', blobUrl)
+        body.append('size', String(file.size))
+        body.append('name', file.name)
+        if (file.type) body.append('mimeType', file.type)
+      } else {
+        body.append('file', file)
+      }
       body.append('note', note)
       body.append('uploader', uploader)
+
       const res = await fetch('/api/files', {
         method: 'POST',
         headers: { 'x-hub-code': localStorage.getItem('hubCode') ?? '' },
@@ -108,6 +145,7 @@ export function UploadCard({ onUploaded }: UploadCardProps) {
       })
     } finally {
       setUploading(false)
+      setProgress(0)
     }
   }
 
@@ -189,7 +227,7 @@ export function UploadCard({ onUploaded }: UploadCardProps) {
                   Drop a file here or click to browse
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  Code, CSVs, notes — anything up to {MAX_FILE_MB} MB
+                  Code, CSVs, notes — anything up to {effectiveMaxMb} MB
                 </p>
               </div>
             </>
@@ -216,7 +254,7 @@ export function UploadCard({ onUploaded }: UploadCardProps) {
               className="flex items-center gap-1.5 text-xs text-muted-foreground"
             >
               <NotebookPen className="h-3.5 w-3.5" aria-hidden />
-              Note — what's this file?
+              Note — what&apos;s this file?
             </Label>
             <Textarea
               id="note"
@@ -237,7 +275,11 @@ export function UploadCard({ onUploaded }: UploadCardProps) {
             ) : (
               <Upload className="h-4 w-4" aria-hidden />
             )}
-            {uploading ? 'Uploading…' : 'Upload'}
+            {uploading
+              ? progress > 0
+                ? `Uploading… ${progress}%`
+                : 'Uploading…'
+              : 'Upload'}
           </Button>
         </div>
       </div>

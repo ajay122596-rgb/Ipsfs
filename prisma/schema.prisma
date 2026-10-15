@@ -15,6 +15,7 @@ model StoredFile {
   mimeType  String   @default("application/octet-stream")
   size      Int
   data      Bytes
+  blobUrl   String   @default("")
   createdAt DateTime @default(now())
 
   @@index([createdAt])
