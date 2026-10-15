@@ -1,0 +1,39 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model StoredFile {
+  id        String   @id @default(cuid())
+  name      String
+  note      String   @default("")
+  uploader  String   @default("Anonymous")
+  mimeType  String   @default("application/octet-stream")
+  size      Int
+  data      Bytes
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  name      String
+  senderId  String   @default("")
+  text      String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model ChatPresence {
+  name        String    @id
+  lastSeen    DateTime  @default(now())
+  typingUntil DateTime?
+
+  @@index([lastSeen])
+}
